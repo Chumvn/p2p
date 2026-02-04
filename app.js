@@ -249,12 +249,70 @@ class P2PShare {
             this.peerNickname = data.nickname;
             this.updateConnectedPeerName(data.nickname);
             this.showToast(`${data.nickname} đã kết nối!`);
+        } else if (data.type === 'file-transfer') {
+            // New single-message file transfer
+            this.receiveFile(data);
         } else if (data.type === 'file-start') {
+            // Legacy chunked transfer (keep for compatibility)
             this.startReceivingFile(data);
         } else if (data.type === 'file-chunk') {
             this.receiveFileChunk(data);
         } else if (data.type === 'file-end') {
             this.completeFileReceive(data);
+        }
+    }
+
+    // New simple file receive
+    receiveFile(data) {
+        console.log(`Receiving file: ${data.fileName}, Size: ${data.fileSize} bytes`);
+
+        // Add to transfer list
+        this.addTransferItem({
+            id: data.fileId,
+            name: data.fileName,
+            size: data.fileSize,
+            direction: 'download',
+            progress: 50
+        });
+
+        try {
+            // Decode base64 to binary
+            const binary = atob(data.data);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+
+            console.log(`File decoded. Expected: ${data.fileSize}, Actual: ${bytes.length}`);
+
+            // Verify size
+            if (bytes.length !== data.fileSize) {
+                console.error(`Size mismatch! Expected ${data.fileSize}, got ${bytes.length}`);
+                this.showToast(`Lỗi: Kích thước file không khớp!`);
+                return;
+            }
+
+            // Create blob and download
+            const blob = new Blob([bytes], { type: data.fileType });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = data.fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+            this.updateTransferProgress(data.fileId, 100);
+            this.completeTransfer(data.fileId);
+            this.showToast(`Đã nhận: ${data.fileName} (${this.formatFileSize(bytes.length)})`);
+
+        } catch (error) {
+            console.error('Error receiving file:', error);
+            this.showToast('Lỗi nhận file');
         }
     }
 
@@ -273,18 +331,15 @@ class P2PShare {
         }
 
         // Prevent sending same file twice
-        if (this.sendingFiles && this.sendingFiles.has(file.name + file.size)) {
+        const fileKey = file.name + '_' + file.size + '_' + file.lastModified;
+        if (this.sendingFiles && this.sendingFiles.has(fileKey)) {
             console.log('File already being sent:', file.name);
             return;
         }
         if (!this.sendingFiles) this.sendingFiles = new Set();
-        this.sendingFiles.add(file.name + file.size);
+        this.sendingFiles.add(fileKey);
 
-        const fileId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-        const chunkSize = 64 * 1024; // 64KB chunks for better reliability
-        const totalChunks = Math.ceil(file.size / chunkSize);
-
-        console.log(`Sending file: ${file.name}, Size: ${file.size}, Chunks: ${totalChunks}`);
+        const fileId = Date.now().toString();
 
         // Add to transfer list
         this.addTransferItem({
@@ -295,61 +350,55 @@ class P2PShare {
             progress: 0
         });
 
-        // Send file metadata
-        this.connection.send({
-            type: 'file-start',
-            fileId: fileId,
-            fileName: file.name,
-            fileSize: file.size,
-            fileType: file.type,
-            totalChunks: totalChunks
-        });
+        console.log(`Sending file: ${file.name}, Size: ${file.size} bytes`);
 
-        // Read and send chunks
+        // Read entire file as ArrayBuffer
         const reader = new FileReader();
-        let currentChunk = 0;
-
-        const readNextChunk = () => {
-            const start = currentChunk * chunkSize;
-            const end = Math.min(start + chunkSize, file.size);
-            const blob = file.slice(start, end);
-            reader.readAsArrayBuffer(blob);
-        };
 
         reader.onload = (e) => {
-            // Convert ArrayBuffer to base64 for lossless transfer
-            const uint8Array = new Uint8Array(e.target.result);
-            const base64 = this.arrayBufferToBase64(uint8Array);
+            const arrayBuffer = e.target.result;
+            const uint8Array = new Uint8Array(arrayBuffer);
 
+            // Convert to base64 for lossless transfer
+            let binary = '';
+            for (let i = 0; i < uint8Array.length; i++) {
+                binary += String.fromCharCode(uint8Array[i]);
+            }
+            const base64Data = btoa(binary);
+
+            console.log(`File read complete. Original: ${uint8Array.length} bytes, Base64: ${base64Data.length} chars`);
+
+            // Send file as single message
             this.connection.send({
-                type: 'file-chunk',
+                type: 'file-transfer',
                 fileId: fileId,
-                chunkIndex: currentChunk,
-                data: base64,
-                size: uint8Array.length // Include original chunk size for verification
+                fileName: file.name,
+                fileSize: file.size,
+                fileType: file.type || 'application/octet-stream',
+                data: base64Data
             });
 
-            currentChunk++;
-            const progress = Math.round((currentChunk / totalChunks) * 100);
-            this.updateTransferProgress(fileId, progress);
+            this.updateTransferProgress(fileId, 100);
+            this.completeTransfer(fileId);
+            this.sendingFiles.delete(fileKey);
+            console.log(`File sent: ${file.name}, Size: ${file.size} bytes`);
+            this.showToast(`Đã gửi: ${file.name}`);
+        };
 
-            if (currentChunk < totalChunks) {
-                // Small delay to prevent overwhelming the connection
-                setTimeout(readNextChunk, 5);
-            } else {
-                this.connection.send({
-                    type: 'file-end',
-                    fileId: fileId,
-                    originalSize: file.size
-                });
-                this.completeTransfer(fileId);
-                this.sendingFiles.delete(file.name + file.size);
-                console.log(`File sent complete: ${file.name}, Size: ${file.size}`);
-                this.showToast(`Đã gửi: ${file.name} (${this.formatFileSize(file.size)})`);
+        reader.onerror = () => {
+            console.error('Error reading file');
+            this.sendingFiles.delete(fileKey);
+            this.showToast('Lỗi đọc file');
+        };
+
+        reader.onprogress = (e) => {
+            if (e.lengthComputable) {
+                const progress = Math.round((e.loaded / e.total) * 50);
+                this.updateTransferProgress(fileId, progress);
             }
         };
 
-        readNextChunk();
+        reader.readAsArrayBuffer(file);
     }
 
     // ===== File Receiving =====
