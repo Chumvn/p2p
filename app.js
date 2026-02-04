@@ -264,7 +264,9 @@ class P2PShare {
 
     // New simple file receive
     receiveFile(data) {
-        console.log(`Receiving file: ${data.fileName}, Size: ${data.fileSize} bytes`);
+        console.log(`📥 RECEIVING: ${data.fileName}`);
+        console.log(`   Expected size: ${data.fileSize} bytes`);
+        console.log(`   Expected checksum: ${data.checksum}`);
 
         // Add to transfer list
         this.addTransferItem({
@@ -284,14 +286,30 @@ class P2PShare {
                 bytes[i] = binary.charCodeAt(i);
             }
 
-            console.log(`File decoded. Expected: ${data.fileSize}, Actual: ${bytes.length}`);
+            // Calculate checksum of received data
+            let receivedChecksum = 0;
+            for (let i = 0; i < bytes.length; i++) {
+                receivedChecksum = (receivedChecksum + bytes[i]) % 65536;
+            }
+
+            console.log(`   Received size: ${bytes.length} bytes`);
+            console.log(`   Received checksum: ${receivedChecksum}`);
 
             // Verify size
             if (bytes.length !== data.fileSize) {
-                console.error(`Size mismatch! Expected ${data.fileSize}, got ${bytes.length}`);
-                this.showToast(`Lỗi: Kích thước file không khớp!`);
+                console.error(`❌ SIZE MISMATCH! Expected ${data.fileSize}, got ${bytes.length}`);
+                this.showToast(`Lỗi: Size không khớp! (${data.fileSize} vs ${bytes.length})`);
                 return;
             }
+
+            // Verify checksum
+            if (data.checksum && receivedChecksum !== data.checksum) {
+                console.error(`❌ CHECKSUM MISMATCH! Expected ${data.checksum}, got ${receivedChecksum}`);
+                this.showToast(`Lỗi: Checksum không khớp!`);
+                return;
+            }
+
+            console.log(`✅ File verified! Size and checksum match.`);
 
             // Create blob and download
             const blob = new Blob([bytes], { type: data.fileType });
@@ -308,11 +326,11 @@ class P2PShare {
 
             this.updateTransferProgress(data.fileId, 100);
             this.completeTransfer(data.fileId);
-            this.showToast(`Đã nhận: ${data.fileName} (${this.formatFileSize(bytes.length)})`);
+            this.showToast(`✅ Đã nhận: ${data.fileName} (${this.formatFileSize(bytes.length)})`);
 
         } catch (error) {
             console.error('Error receiving file:', error);
-            this.showToast('Lỗi nhận file');
+            this.showToast('Lỗi nhận file: ' + error.message);
         }
     }
 
@@ -359,6 +377,12 @@ class P2PShare {
             const arrayBuffer = e.target.result;
             const uint8Array = new Uint8Array(arrayBuffer);
 
+            // Calculate simple checksum
+            let checksum = 0;
+            for (let i = 0; i < uint8Array.length; i++) {
+                checksum = (checksum + uint8Array[i]) % 65536;
+            }
+
             // Convert to base64 for lossless transfer
             let binary = '';
             for (let i = 0; i < uint8Array.length; i++) {
@@ -366,7 +390,10 @@ class P2PShare {
             }
             const base64Data = btoa(binary);
 
-            console.log(`File read complete. Original: ${uint8Array.length} bytes, Base64: ${base64Data.length} chars`);
+            console.log(`📤 SENDING: ${file.name}`);
+            console.log(`   Original size: ${uint8Array.length} bytes`);
+            console.log(`   Base64 length: ${base64Data.length} chars`);
+            console.log(`   Checksum: ${checksum}`);
 
             // Send file as single message
             this.connection.send({
@@ -375,14 +402,14 @@ class P2PShare {
                 fileName: file.name,
                 fileSize: file.size,
                 fileType: file.type || 'application/octet-stream',
-                data: base64Data
+                data: base64Data,
+                checksum: checksum
             });
 
             this.updateTransferProgress(fileId, 100);
             this.completeTransfer(fileId);
             this.sendingFiles.delete(fileKey);
-            console.log(`File sent: ${file.name}, Size: ${file.size} bytes`);
-            this.showToast(`Đã gửi: ${file.name}`);
+            this.showToast(`Đã gửi: ${file.name} (${this.formatFileSize(file.size)})`);
         };
 
         reader.onerror = () => {
