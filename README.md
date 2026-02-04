@@ -1,4 +1,4 @@
-# P2P Share
+# CHUM P2P
 
 [![GitHub](https://img.shields.io/badge/GitHub-Chumvn/p2p-blue?logo=github)](https://github.com/Chumvn/p2p)
 
