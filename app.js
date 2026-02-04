@@ -102,24 +102,65 @@ class P2PShare {
     }
 
     generateQRCode(code) {
-        const url = `${window.location.origin}${window.location.pathname}?room=${code}`;
         const qrContainer = document.getElementById('qrCode');
         qrContainer.innerHTML = '';
 
-        QRCode.toCanvas(document.createElement('canvas'), url, {
-            width: 160,
-            margin: 0,
-            color: {
-                dark: '#2d3748',
-                light: '#ffffff'
+        // Build URL - handle file:// protocol
+        let url;
+        if (window.location.protocol === 'file:') {
+            // For local testing, just show the room code
+            url = code;
+        } else {
+            url = `${window.location.origin}${window.location.pathname}?room=${code}`;
+        }
+
+        // Try different QRCode library methods
+        if (typeof QRCode !== 'undefined') {
+            // Method 1: QRCode.toCanvas (node-qrcode style)
+            if (typeof QRCode.toCanvas === 'function') {
+                const canvas = document.createElement('canvas');
+                QRCode.toCanvas(canvas, url, {
+                    width: 160,
+                    margin: 1,
+                    color: {
+                        dark: '#2d3748',
+                        light: '#ffffff'
+                    }
+                }, (err) => {
+                    if (err) {
+                        console.error('QR Error:', err);
+                        this.showQRFallback(qrContainer, code);
+                        return;
+                    }
+                    qrContainer.appendChild(canvas);
+                });
             }
-        }, (err, canvas) => {
-            if (err) {
-                console.error('QR Error:', err);
-                return;
+            // Method 2: new QRCode() (qrcodejs style)
+            else if (typeof QRCode === 'function') {
+                new QRCode(qrContainer, {
+                    text: url,
+                    width: 160,
+                    height: 160,
+                    colorDark: '#2d3748',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.L
+                });
             }
-            qrContainer.appendChild(canvas);
-        });
+            else {
+                this.showQRFallback(qrContainer, code);
+            }
+        } else {
+            this.showQRFallback(qrContainer, code);
+        }
+    }
+
+    showQRFallback(container, code) {
+        // Fallback: show a styled code display
+        container.innerHTML = `
+            <div style="width:160px;height:160px;display:flex;align-items:center;justify-content:center;background:#f0f0f0;border-radius:8px;font-size:24px;font-weight:bold;color:#2d3748;font-family:monospace;">
+                ${code}
+            </div>
+        `;
     }
 
     // ===== Connection Management =====
