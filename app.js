@@ -271,9 +271,19 @@ class P2PShare {
             return;
         }
 
-        const fileId = Date.now().toString();
-        const chunkSize = 16 * 1024; // 16KB chunks
+        // Prevent sending same file twice
+        if (this.sendingFiles && this.sendingFiles.has(file.name + file.size)) {
+            console.log('File already being sent:', file.name);
+            return;
+        }
+        if (!this.sendingFiles) this.sendingFiles = new Set();
+        this.sendingFiles.add(file.name + file.size);
+
+        const fileId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+        const chunkSize = 64 * 1024; // 64KB chunks for better reliability
         const totalChunks = Math.ceil(file.size / chunkSize);
+
+        console.log(`Sending file: ${file.name}, Size: ${file.size}, Chunks: ${totalChunks}`);
 
         // Add to transfer list
         this.addTransferItem({
@@ -318,15 +328,18 @@ class P2PShare {
             this.updateTransferProgress(fileId, progress);
 
             if (currentChunk < totalChunks) {
-                // Small delay to prevent overwhelming
-                setTimeout(readNextChunk, 10);
+                // Small delay to prevent overwhelming the connection
+                setTimeout(readNextChunk, 5);
             } else {
                 this.connection.send({
                     type: 'file-end',
-                    fileId: fileId
+                    fileId: fileId,
+                    originalSize: file.size
                 });
                 this.completeTransfer(fileId);
-                this.showToast(`Đã gửi: ${file.name}`);
+                this.sendingFiles.delete(file.name + file.size);
+                console.log(`File sent complete: ${file.name}, Size: ${file.size}`);
+                this.showToast(`Đã gửi: ${file.name} (${this.formatFileSize(file.size)})`);
             }
         };
 
@@ -355,12 +368,26 @@ class P2PShare {
 
     receiveFileChunk(data) {
         const file = this.receivingFiles.get(data.fileId);
-        if (!file) return;
+        if (!file) {
+            console.warn('Received chunk for unknown file:', data.fileId);
+            return;
+        }
 
-        // Store chunk at correct index
+        // Convert to Uint8Array if needed for consistent handling
+        let chunkData = data.data;
+        if (chunkData instanceof ArrayBuffer) {
+            chunkData = new Uint8Array(chunkData);
+        }
+
+        // Store chunk at correct index (only if not already received)
         if (!file.chunks[data.chunkIndex]) {
-            file.chunks[data.chunkIndex] = data.data;
+            file.chunks[data.chunkIndex] = chunkData;
             file.receivedChunks++;
+
+            // Log progress every 10 chunks
+            if (file.receivedChunks % 10 === 0 || file.receivedChunks === file.totalChunks) {
+                console.log(`Receiving: ${file.receivedChunks}/${file.totalChunks} chunks`);
+            }
         }
 
         const progress = Math.round((file.receivedChunks / file.totalChunks) * 100);
@@ -571,38 +598,50 @@ class P2PShare {
 
         // File selection
         const fileInput = document.getElementById('fileInput');
-        document.getElementById('selectFileBtn').addEventListener('click', () => {
+        document.getElementById('selectFileBtn').addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent dropZone click
             fileInput.click();
         });
 
         fileInput.addEventListener('change', (e) => {
-            Array.from(e.target.files).forEach(file => {
+            const files = Array.from(e.target.files);
+            if (files.length === 0) return;
+
+            files.forEach(file => {
                 this.sendFile(file);
             });
-            fileInput.value = '';
+            fileInput.value = ''; // Reset input
         });
 
         // Drag and drop
         const dropZone = document.getElementById('dropZone');
 
-        dropZone.addEventListener('click', () => {
+        // Only trigger file input if clicking on the zone itself, not buttons
+        dropZone.addEventListener('click', (e) => {
+            // Don't trigger if clicking on the select button
+            if (e.target.closest('#selectFileBtn')) return;
             fileInput.click();
         });
 
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             dropZone.classList.add('drag-over');
         });
 
-        dropZone.addEventListener('dragleave', () => {
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             dropZone.classList.remove('drag-over');
         });
 
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             dropZone.classList.remove('drag-over');
 
-            Array.from(e.dataTransfer.files).forEach(file => {
+            const files = Array.from(e.dataTransfer.files);
+            files.forEach(file => {
                 this.sendFile(file);
             });
         });
