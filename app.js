@@ -175,7 +175,8 @@ class P2PShare {
         this.updateStatus('Đang kết nối...', 'connecting');
 
         const conn = this.peer.connect(peerId, {
-            reliable: true
+            reliable: true,
+            serialization: 'binary' // Use binary mode for lossless file transfer
         });
 
         conn.on('open', () => {
@@ -316,11 +317,16 @@ class P2PShare {
         };
 
         reader.onload = (e) => {
+            // Convert ArrayBuffer to base64 for lossless transfer
+            const uint8Array = new Uint8Array(e.target.result);
+            const base64 = this.arrayBufferToBase64(uint8Array);
+
             this.connection.send({
                 type: 'file-chunk',
                 fileId: fileId,
                 chunkIndex: currentChunk,
-                data: e.target.result
+                data: base64,
+                size: uint8Array.length // Include original chunk size for verification
             });
 
             currentChunk++;
@@ -373,10 +379,23 @@ class P2PShare {
             return;
         }
 
-        // Convert to Uint8Array if needed for consistent handling
-        let chunkData = data.data;
-        if (chunkData instanceof ArrayBuffer) {
-            chunkData = new Uint8Array(chunkData);
+        // Decode base64 to binary (sent as base64 for lossless transfer)
+        let chunkData;
+        if (typeof data.data === 'string') {
+            // Data is base64 encoded
+            chunkData = this.base64ToArrayBuffer(data.data);
+        } else if (data.data instanceof ArrayBuffer) {
+            chunkData = new Uint8Array(data.data);
+        } else if (data.data instanceof Uint8Array) {
+            chunkData = data.data;
+        } else {
+            console.error('Unknown chunk data type:', typeof data.data);
+            return;
+        }
+
+        // Verify chunk size if provided
+        if (data.size && chunkData.length !== data.size) {
+            console.warn(`Chunk ${data.chunkIndex} size mismatch: expected ${data.size}, got ${chunkData.length}`);
         }
 
         // Store chunk at correct index (only if not already received)
@@ -527,6 +546,27 @@ class P2PShare {
         setTimeout(() => {
             toast.classList.remove('show');
         }, 3000);
+    }
+
+    // Base64 helpers for lossless binary transfer
+    arrayBufferToBase64(buffer) {
+        let binary = '';
+        const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+
+    base64ToArrayBuffer(base64) {
+        const binary = atob(base64);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
     }
 
     formatFileSize(bytes) {
