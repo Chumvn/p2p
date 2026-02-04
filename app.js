@@ -1,21 +1,47 @@
 // ===== P2P File Share Application =====
 
+// Cute animal names with icons
+const CUTE_NAMES = [
+    '🐻 Gấu Bông', '🐱 Mèo Mập', '🐔 Gà Con', '🐰 Thỏ Ngọc',
+    '🦊 Cáo Tinh', '🐼 Panda', '🐨 Koala', '🦁 Sư Tử',
+    '🐯 Hổ Con', '🐸 Ếch Xanh', '🐧 Chim Cánh Cụt', '🦋 Bướm Xinh',
+    '🐶 Cún Con', '🐷 Heo Hồng', '🦄 Kỳ Lân', '🐢 Rùa Con',
+    '🦉 Cú Mèo', '🐝 Ong Vàng', '🦈 Cá Mập', '🐙 Bạch Tuộc',
+    '🦀 Cua Đỏ', '🐳 Cá Voi', '🦩 Hồng Hạc', '🦜 Vẹt Xanh',
+    '🐿️ Sóc Nâu', '🦔 Nhím Tròn', '🐲 Rồng Con', '🌸 Lulu',
+    '⭐ Star', '🌈 Rainbow', '🍀 Lucky', '💎 Diamond'
+];
+
 class P2PShare {
     constructor() {
         this.peer = null;
         this.connection = null;
         this.myPeerId = null;
+        this.myNickname = this.getRandomNickname();
+        this.peerNickname = null;
         this.isHost = false;
         this.receivingFiles = new Map();
 
         this.init();
     }
 
+    getRandomNickname() {
+        return CUTE_NAMES[Math.floor(Math.random() * CUTE_NAMES.length)];
+    }
+
     init() {
         this.setupTheme();
         this.setupEventListeners();
+        this.displayMyNickname();
         this.checkUrlParams();
         this.initPeer();
+    }
+
+    displayMyNickname() {
+        const nicknameEl = document.getElementById('myNickname');
+        if (nicknameEl) {
+            nicknameEl.textContent = `Bạn là: ${this.myNickname}`;
+        }
     }
 
     // ===== Theme Management =====
@@ -165,7 +191,24 @@ class P2PShare {
 
     handleConnection(conn) {
         this.connection = conn;
-        this.updateStatus('Đã kết nối với ' + conn.peer, 'connected');
+
+        // Send our nickname to the peer
+        conn.on('open', () => {
+            conn.send({
+                type: 'nickname',
+                nickname: this.myNickname
+            });
+        });
+
+        // If connection is already open, send nickname immediately
+        if (conn.open) {
+            conn.send({
+                type: 'nickname',
+                nickname: this.myNickname
+            });
+        }
+
+        this.updateStatus('Đã kết nối', 'connected');
         this.showConnectedPanel();
         this.showToast('Đã kết nối thành công!');
 
@@ -185,6 +228,7 @@ class P2PShare {
 
     handleDisconnect() {
         this.connection = null;
+        this.peerNickname = null;
         this.updateStatus('Đã ngắt kết nối', 'ready');
         this.showConnectionPanel();
         this.showToast('Đã ngắt kết nối');
@@ -200,12 +244,23 @@ class P2PShare {
 
     // ===== Data Handling =====
     handleData(data) {
-        if (data.type === 'file-start') {
+        if (data.type === 'nickname') {
+            this.peerNickname = data.nickname;
+            this.updateConnectedPeerName(data.nickname);
+            this.showToast(`${data.nickname} đã kết nối!`);
+        } else if (data.type === 'file-start') {
             this.startReceivingFile(data);
         } else if (data.type === 'file-chunk') {
             this.receiveFileChunk(data);
         } else if (data.type === 'file-end') {
             this.completeFileReceive(data);
+        }
+    }
+
+    updateConnectedPeerName(nickname) {
+        const peerText = document.getElementById('connectedPeerText');
+        if (peerText) {
+            peerText.textContent = `Đã kết nối với ${nickname}`;
         }
     }
 
@@ -285,7 +340,7 @@ class P2PShare {
             size: data.fileSize,
             type: data.fileType,
             totalChunks: data.totalChunks,
-            chunks: [],
+            chunks: new Array(data.totalChunks), // Pre-allocate array with correct size
             receivedChunks: 0
         });
 
@@ -302,8 +357,11 @@ class P2PShare {
         const file = this.receivingFiles.get(data.fileId);
         if (!file) return;
 
-        file.chunks[data.chunkIndex] = data.data;
-        file.receivedChunks++;
+        // Store chunk at correct index
+        if (!file.chunks[data.chunkIndex]) {
+            file.chunks[data.chunkIndex] = data.data;
+            file.receivedChunks++;
+        }
 
         const progress = Math.round((file.receivedChunks / file.totalChunks) * 100);
         this.updateTransferProgress(data.fileId, progress);
@@ -313,20 +371,45 @@ class P2PShare {
         const file = this.receivingFiles.get(data.fileId);
         if (!file) return;
 
-        // Combine chunks
-        const blob = new Blob(file.chunks, { type: file.type });
+        // Check if all chunks received
+        let missingChunks = [];
+        for (let i = 0; i < file.totalChunks; i++) {
+            if (!file.chunks[i]) {
+                missingChunks.push(i);
+            }
+        }
+
+        if (missingChunks.length > 0) {
+            console.error('Missing chunks:', missingChunks);
+            this.showToast(`Lỗi: Thiếu ${missingChunks.length} phần của file`);
+            return;
+        }
+
+        // Filter out any undefined values and combine chunks
+        const validChunks = file.chunks.filter(chunk => chunk !== undefined);
+        const blob = new Blob(validChunks, { type: file.type || 'application/octet-stream' });
+
+        // Verify file size
+        console.log(`File size - Expected: ${file.size}, Received: ${blob.size}`);
+        if (blob.size !== file.size) {
+            console.warn(`Size mismatch! Expected ${file.size}, got ${blob.size}`);
+        }
+
         const url = URL.createObjectURL(blob);
 
         // Trigger download
         const a = document.createElement('a');
         a.href = url;
         a.download = file.name;
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
 
         this.completeTransfer(data.fileId);
         this.receivingFiles.delete(data.fileId);
-        this.showToast(`Đã nhận: ${file.name}`);
+        this.showToast(`Đã nhận: ${file.name} (${this.formatFileSize(blob.size)})`);
     }
 
     // ===== UI Updates =====
