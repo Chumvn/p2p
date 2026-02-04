@@ -47,6 +47,17 @@ class P2PShare {
     initPeer() {
         this.myPeerId = this.generateRoomCode();
 
+        // Display room code and QR immediately (don't wait for PeerJS)
+        this.displayRoomCode(this.myPeerId);
+        this.generateQRCode(this.myPeerId);
+
+        // Check if PeerJS is available
+        if (typeof Peer === 'undefined') {
+            console.error('PeerJS not loaded');
+            this.updateStatus('Lỗi: Không load được PeerJS. Hãy dùng Live Server hoặc deploy lên GitHub.', 'error');
+            return;
+        }
+
         this.peer = new Peer(this.myPeerId, {
             debug: 0,
             config: {
@@ -60,8 +71,6 @@ class P2PShare {
         this.peer.on('open', (id) => {
             console.log('Connected to PeerJS, ID:', id);
             this.updateStatus('Sẵn sàng kết nối', 'ready');
-            this.displayRoomCode(id);
-            this.generateQRCode(id);
         });
 
         this.peer.on('connection', (conn) => {
