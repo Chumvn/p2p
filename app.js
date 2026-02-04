@@ -343,6 +343,15 @@ class P2PShare {
 
     // ===== File Sending =====
     sendFile(file) {
+        // DEBUG: Log file info immediately when received
+        console.log('='.repeat(50));
+        console.log('📁 FILE SELECTED:');
+        console.log('   Name:', file.name);
+        console.log('   Size:', file.size, 'bytes', '(', (file.size / 1024 / 1024).toFixed(2), 'MB )');
+        console.log('   Type:', file.type);
+        console.log('   Last Modified:', new Date(file.lastModified).toLocaleString());
+        console.log('='.repeat(50));
+
         if (!this.connection) {
             this.showToast('Chưa kết nối');
             return;
